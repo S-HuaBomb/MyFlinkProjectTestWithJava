@@ -22,7 +22,7 @@ Flink的一个简单应用——计算实时热门商品
 商品类目ID|整数类型，加密后的商品所属类目ID
 行为类型|字符串，枚举类型，包括(‘pv’, ‘buy’, ‘cart’, ‘fav’)
 时间戳|行为发生的时间戳，单位秒
-* 数据集已经在项目的 resources 目录下。 *
+** 数据集已经在项目的 resources 目录下。 **
 ### 创建模拟数据源
 由于是一个csv文件，我们在程序中使用 CsvInputFormat 创建模拟数据源。
 > 注：虽然一个流式应用应该是一个一直运行着的程序，需要消费一个无限数据源。但是在本案例教程中，为了省去构建真实数据源的繁琐，我们使用了文件来模拟真实数据源，这并不影响下文要介绍的知识点。这也是一种本地验证 Flink 应用程序正确性的常用方式。
@@ -49,5 +49,67 @@ DataStream<UserBehavior> timedData = dataSource
       }
     });
  ```
+这样我们就得到了一个带有时间标记的数据流了，后面就能做一些窗口的操作。
+### 过滤出点击事件
+在开始窗口操作之前，先回顾下需求“每隔5分钟输出过去一小时内点击量最多的前 N 个商品”。由于原始数据中存在点击、加购、购买、收藏各种行为的数据，但是我们只需要统计点击量，所以先使用 FilterFunction 将点击行为数据过滤出来。
+```java
+DataStream<UserBehavior> pvData = timedData
+    .filter(new FilterFunction<UserBehavior>() {
+      @Override
+      public boolean filter(UserBehavior userBehavior) throws Exception {
+        // 过滤出只有点击的数据
+        return userBehavior.behavior.equals("pv");
+      }
+    });
+ ```
+ ### 窗口统计点击量
+由于要每隔5分钟统计一次最近一小时每个商品的点击量，所以窗口大小是一小时，每隔5分钟滑动一次。即分别要统计 \[09:00, 10:00), \[09:05, 10:05), \[09:10, 10:10)… 等窗口的商品点击量。是一个常见的滑动窗口需求（Sliding Window）。
+```java
+DataStream<ItemViewCount> windowedData = pvData
+    .keyBy("itemId")
+    .timeWindow(Time.minutes(60), Time.minutes(5))
+    .aggregate(new CountAgg(), new WindowResultFunction());
+```
+我们使用.keyBy("itemId")对商品进行分组，使用.timeWindow(Time size, Time slide)对每个商品做滑动窗口（1小时窗口，5分钟滑动一次）。然后我们使用 .aggregate(AggregateFunction af, WindowFunction wf) 做增量的聚合操作，它能使用AggregateFunction提前聚合掉数据，减少 state 的存储压力。较之.apply(WindowFunction wf)会将窗口中的数据都存储下来，最后一起计算要高效地多。aggregate()方法的第一个参数用于这里的CountAgg实现了AggregateFunction接口，功能是统计窗口中的条数，即遇到一条数据就加一。
+```java
+/** COUNT 统计的聚合函数实现，每出现一条记录加一 */
+public static class CountAgg implements AggregateFunction<UserBehavior, Long, Long> {
 
+  @Override
+  public Long createAccumulator() {
+    return 0L;
+  }
 
+  @Override
+  public Long add(UserBehavior userBehavior, Long acc) {
+    return acc + 1;
+  }
+
+  @Override
+  public Long getResult(Long acc) {
+    return acc;
+  }
+
+  @Override
+  public Long merge(Long acc1, Long acc2) {
+    return acc1 + acc2;
+  }
+}
+```
+.aggregate(AggregateFunction af, WindowFunction wf) 的第二个参数WindowFunction将每个 key每个窗口聚合后的结果带上其他信息进行输出。我们这里实现的WindowResultFunction将主键商品ID，窗口，点击量封装成了ItemViewCount进行输出。
+### TopN 计算最热门商品
+为了统计每个窗口下最热门的商品，我们需要再次按窗口进行分组，这里根据ItemViewCount中的windowEnd进行keyBy()操作。然后使用 ProcessFunction 实现一个自定义的 TopN 函数 TopNHotItems 来计算点击量排名前3名的商品，并将排名结果格式化成字符串，便于后续输出。
+```java
+DataStream<String> topItems = windowedData
+    .keyBy("windowEnd")
+    .process(new TopNHotItems(3));  // 求点击量前3名的商品
+ ```
+ ProcessFunction 是 Flink 提供的一个 low-level API，用于实现更高级的功能。它主要提供了定时器 timer 的功能（支持EventTime或ProcessingTime）。本案例中我们将利用 timer 来判断何时收齐了某个 window 下所有商品的点击量数据。由于 Watermark 的进度是全局的，
+
+在 processElement 方法中，每当收到一条数据（ItemViewCount），我们就注册一个 windowEnd+1 的定时器（Flink 框架会自动忽略同一时间的重复注册）。windowEnd+1 的定时器被触发时，意味着收到了windowEnd+1的 Watermark，即收齐了该windowEnd下的所有商品窗口统计值。我们在 onTimer() 中处理将收集的所有商品及点击量进行排序，选出 TopN，并将排名信息格式化成字符串后进行输出。
+
+这里我们还使用了 ListState<ItemViewCount> 来存储收到的每条 ItemViewCount 消息，保证在发生故障时，状态数据的不丢失和一致性。ListState 是 Flink 提供的类似 Java List 接口的 State API，它集成了框架的 checkpoint 机制，自动做到了 exactly-once 的语义保证。
+   
+### 运行程序
+直接运行 main 函数，就能看到不断输出的每个时间点的热门商品ID。
+[](https://img.alicdn.com/tfs/TB1o_fIn3TqK1RjSZPhXXXfOFXa-1534-1270.png)
