@@ -1,10 +1,10 @@
 # MyFlinkProjectTestWithJava
 Flink的一个简单应用——计算实时热门商品
 通过本文你将学到：
-   1.如何基于 EventTime 处理，如何指定 Watermark
-   2.如何使用 Flink 灵活的 Window API
-   3.何时需要用到 State，以及如何使用
-   4.如何使用 ProcessFunction 实现 TopN 功能
+   1. 如何基于 EventTime 处理，如何指定 Watermark
+   2. 如何使用 Flink 灵活的 Window API
+   3. 何时需要用到 State，以及如何使用
+   4. 如何使用 ProcessFunction 实现 TopN 功能
    
 ##### 实战案例介绍
 本案例将实现一个“实时热门商品”的需求，我们可以将“实时热门商品”翻译成程序员更好理解的需求：每隔5分钟输出最近一小时内点击量最多的前 N 个商品。将这个需求进行分解我们大概要做这么几件事情：
