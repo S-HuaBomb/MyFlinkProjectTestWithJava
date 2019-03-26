@@ -1,4 +1,6 @@
 # MyFlinkProjectTestWithJava
+----
+参考：[云邪的博客](http://wuchong.me/blog/2018/11/07/use-flink-calculate-hot-items/)
 Flink的一个简单应用——计算实时热门商品
 ### 通过本文你将学到：
    1. 如何基于 EventTime 处理，如何指定 Watermark
@@ -112,4 +114,4 @@ DataStream<String> topItems = windowedData
    
 ### 运行程序
 直接运行 main 函数，就能看到不断输出的每个时间点的热门商品ID。
-[](https://img.alicdn.com/tfs/TB1o_fIn3TqK1RjSZPhXXXfOFXa-1534-1270.png)
+![运行结果](https://img.alicdn.com/tfs/TB1o_fIn3TqK1RjSZPhXXXfOFXa-1534-1270.png)
